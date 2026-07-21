@@ -653,6 +653,7 @@ button.is-active,
   background: var(--book-cover);
   box-shadow: var(--book-shadow);
   isolation: isolate;
+  perspective: 1600px;
 }
 
 .book-page {
@@ -662,6 +663,8 @@ button.is-active,
   padding: clamp(34px, 4.3vw, 58px) clamp(30px, 4vw, 54px) 56px;
   color: var(--text-soft);
   background: var(--book-page);
+  backface-visibility: hidden;
+  transform-style: preserve-3d;
 }
 
 .book-page-left {
@@ -672,6 +675,76 @@ button.is-active,
 .book-page-right {
   border-radius: 3px 12px 12px 3px;
   box-shadow: inset 28px 0 30px -32px var(--book-gutter);
+}
+
+.book-spread.is-turning-forward .book-page-right {
+  transform-origin: left center;
+  animation: book-turn-forward 380ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
+}
+
+.book-spread.is-turning-backward .book-page-left {
+  transform-origin: right center;
+  animation: book-turn-backward 380ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
+}
+
+@keyframes book-turn-forward {
+  from {
+    opacity: 0.38;
+    transform: translate3d(-8px, 0, 0) rotateY(-58deg);
+  }
+
+  68% {
+    opacity: 1;
+    transform: translate3d(1px, 0, 0) rotateY(2deg);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) rotateY(0);
+  }
+}
+
+@keyframes book-turn-backward {
+  from {
+    opacity: 0.38;
+    transform: translate3d(8px, 0, 0) rotateY(58deg);
+  }
+
+  68% {
+    opacity: 1;
+    transform: translate3d(-1px, 0, 0) rotateY(-2deg);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) rotateY(0);
+  }
+}
+
+@keyframes book-slide-forward {
+  from {
+    opacity: 0.45;
+    transform: translate3d(14px, 0, 0);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes book-slide-backward {
+  from {
+    opacity: 0.45;
+    transform: translate3d(-14px, 0, 0);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
 }
 
 .book-page-copy {
@@ -866,6 +939,14 @@ button.is-active,
     box-shadow: none;
   }
 
+  .book-spread.is-turning-forward .book-page-right {
+    animation-name: book-slide-forward;
+  }
+
+  .book-spread.is-turning-backward .book-page-left {
+    animation-name: book-slide-backward;
+  }
+
   .book-gutter {
     display: none;
   }
@@ -1033,6 +1114,8 @@ button.is-active,
   *,
   *::before,
   *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
   }

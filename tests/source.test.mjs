@@ -41,6 +41,8 @@ test("contains the bilingual reader experience", async () => {
   assert.match(reader, /aria-live="polite"/);
   assert.match(reader, /paginateBookParagraphs/);
   assert.match(reader, /getBookPageCapacity/);
+  assert.match(reader, /pageTurnDirection/);
+  assert.match(reader, /onAnimationEnd/);
   assert.match(reader, /Hai trang/);
   assert.match(reader, /defaultValue=\{SAMPLE_TEXT\}/);
   assert.match(reader, /draftTextRef/);
@@ -55,6 +57,9 @@ test("contains the bilingual reader experience", async () => {
   assert.match(speech, /chooseSpeechVoice/);
   assert.match(css, /\.book-spread/);
   assert.match(css, /\.book-gutter/);
+  assert.match(css, /@keyframes book-turn-forward/);
+  assert.match(css, /@keyframes book-turn-backward/);
+  assert.match(css, /animation-duration: 0\.01ms/);
   assert.match(css, /\.is-speaking/);
   assert.match(css, /@container reader/);
   assert.match(css, /prefers-reduced-motion: reduce/);
