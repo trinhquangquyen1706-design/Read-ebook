@@ -19,7 +19,6 @@ import {
 type Theme = "night" | "sepia" | "light";
 type LanguageProfile = "auto" | "vi" | "en";
 type ReaderLayout = "continuous" | "book";
-type PageTurnDirection = "forward" | "backward" | null;
 type ReaderFont =
   | "lora"
   | "source-serif"
@@ -362,8 +361,6 @@ export function ReaderApp() {
   const [preferencesReady, setPreferencesReady] = useState(false);
   const [activeParagraph, setActiveParagraph] = useState(0);
   const [bookSpread, setBookSpread] = useState(0);
-  const [pageTurnDirection, setPageTurnDirection] =
-    useState<PageTurnDirection>(null);
   const [draftDetectedLanguage, setDraftDetectedLanguage] = useState<
     "vi" | "en"
   >(() => detectLanguage(SAMPLE_TEXT));
@@ -548,7 +545,6 @@ export function ReaderApp() {
       processedSourceRef.current = source;
       setParagraphs(nextParagraphs);
       setActiveParagraph(0);
-      setPageTurnDirection(null);
       setBookSpread(0);
       setIsProcessing(false);
       setStatus(
@@ -586,7 +582,6 @@ export function ReaderApp() {
 
   const setReaderLayout = (layout: ReaderLayout) => {
     updatePreferences({ layout });
-    setPageTurnDirection(null);
     setBookSpread(0);
     if (preferences.focusMode) setActiveParagraph(0);
     setStatus(
@@ -601,7 +596,6 @@ export function ReaderApp() {
     updatePreferences({ focusMode: next });
     if (next) {
       setActiveParagraph(0);
-      setPageTurnDirection(null);
       setBookSpread(0);
     }
     setStatus(
@@ -621,21 +615,10 @@ export function ReaderApp() {
 
       if (preferences.layout === "book") {
         const pageIndex = paragraphBookPages[next] ?? 0;
-        const nextSpread = Math.floor(pageIndex / 2);
-        if (nextSpread !== currentBookSpread) {
-          setPageTurnDirection(
-            nextSpread > currentBookSpread ? "forward" : "backward",
-          );
-        }
-        setBookSpread(nextSpread);
+        setBookSpread(Math.floor(pageIndex / 2));
       }
     },
-    [
-      currentBookSpread,
-      paragraphBookPages,
-      paragraphs.length,
-      preferences.layout,
-    ],
+    [paragraphBookPages, paragraphs.length, preferences.layout],
   );
 
   const moveParagraph = useCallback(
@@ -653,7 +636,6 @@ export function ReaderApp() {
       );
       if (next === currentBookSpread) return;
 
-      setPageTurnDirection(direction === 1 ? "forward" : "backward");
       setBookSpread(next);
       const firstParagraph =
         bookPages[next * 2]?.[0] ?? bookPages[next * 2 + 1]?.[0];
@@ -731,7 +713,6 @@ export function ReaderApp() {
     }
 
     let speechParagraphs = paragraphs;
-    let synchronizedSource = false;
     if (source !== processedSourceRef.current) {
       if (processTimer.current !== null) {
         window.clearTimeout(processTimer.current);
@@ -739,11 +720,9 @@ export function ReaderApp() {
       }
 
       speechParagraphs = formatText(source);
-      synchronizedSource = true;
       processedSourceRef.current = source;
       setParagraphs(speechParagraphs);
       setActiveParagraph(0);
-      setPageTurnDirection(null);
       setBookSpread(0);
       setError("");
       setIsProcessing(false);
@@ -806,7 +785,6 @@ export function ReaderApp() {
       setStatus(message);
     };
 
-    let speechSpread = synchronizedSource ? 0 : currentBookSpread;
     const speakChunk = (queueIndex: number) => {
       if (speechSessionRef.current !== session) return;
       const chunk = speechQueue[queueIndex];
@@ -822,14 +800,7 @@ export function ReaderApp() {
 
         if (preferences.layout === "book") {
           const pageIndex = speechPageByParagraph[chunk.paragraphIndex] ?? 0;
-          const nextSpread = Math.floor(pageIndex / 2);
-          if (nextSpread !== speechSpread) {
-            setPageTurnDirection(
-              nextSpread > speechSpread ? "forward" : "backward",
-            );
-            speechSpread = nextSpread;
-          }
-          setBookSpread(nextSpread);
+          setBookSpread(Math.floor(pageIndex / 2));
         }
       }
 
@@ -884,7 +855,6 @@ export function ReaderApp() {
     setError("");
     setIsProcessing(false);
     setActiveParagraph(0);
-    setPageTurnDirection(null);
     setBookSpread(0);
     setStatus("Đã xóa văn bản. Nội dung không được lưu trên máy chủ.");
   };
@@ -906,7 +876,6 @@ export function ReaderApp() {
     setDraftDetectedLanguage(detectLanguage(SAMPLE_TEXT));
     setParagraphs(initialParagraphs);
     setActiveParagraph(0);
-    setPageTurnDirection(null);
     setBookSpread(0);
     setError("");
     setIsProcessing(false);
@@ -915,7 +884,6 @@ export function ReaderApp() {
 
   const resetSettings = () => {
     setPreferences(DEFAULT_PREFERENCES);
-    setPageTurnDirection(null);
     setBookSpread(0);
     setStatus("Đã đưa cài đặt đọc về mặc định.");
   };
@@ -1293,18 +1261,12 @@ export function ReaderApp() {
                       }
                     >
                       <div
-                        key={firstBookPageIndex}
-                        className={`book-spread${
-                          pageTurnDirection
-                            ? ` is-turning-${pageTurnDirection}`
-                            : ""
-                        }`}
+                        className="book-spread"
                         role="group"
                         aria-label={`Trang ${firstBookPageIndex + 1} và ${Math.min(
                           firstBookPageIndex + 2,
                           bookDisplayPageCount,
                         )}`}
-                        onAnimationEnd={() => setPageTurnDirection(null)}
                       >
                         {[0, 1].map((slot) => {
                           const pageIndex = firstBookPageIndex + slot;
