@@ -733,7 +733,9 @@ button.is-active,
   transition: opacity 240ms ease, transform 240ms ease;
 }
 
-.focus-copy p:not(.book-empty-page)::before {
+.focus-copy p:not(.book-empty-page)::before,
+.reader-copy p.is-speaking::before,
+.book-page-copy p.is-speaking::before {
   content: "";
   position: absolute;
   top: 0.28em;
@@ -754,9 +756,17 @@ button.is-active,
   transform: translateX(5px);
 }
 
-.focus-copy p.is-current::before {
+.focus-copy p.is-current::before,
+.reader-copy p.is-speaking::before,
+.book-page-copy p.is-speaking::before {
   opacity: 1;
   transform: scaleY(1);
+}
+
+.reader-copy p.is-speaking,
+.book-page-copy p.is-speaking {
+  color: var(--text);
+  box-shadow: inset 0 -1px color-mix(in srgb, var(--accent) 42%, transparent);
 }
 
 .focus-copy p.is-dimmed {

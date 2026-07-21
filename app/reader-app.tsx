@@ -10,6 +10,11 @@ import {
   type CSSProperties,
   type KeyboardEvent,
 } from "react";
+import {
+  buildSpeechQueue,
+  chooseSpeechVoice,
+  type SpeechLanguage,
+} from "./speech";
 
 type Theme = "night" | "sepia" | "light";
 type LanguageProfile = "auto" | "vi" | "en";
@@ -344,8 +349,13 @@ export function ReaderApp() {
   const initialParagraphs = useMemo(() => formatText(SAMPLE_TEXT), []);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const draftTextRef = useRef(SAMPLE_TEXT);
+  const processedSourceRef = useRef(SAMPLE_TEXT);
   const draftCharactersRef = useRef<HTMLSpanElement>(null);
   const draftWordsRef = useRef<HTMLSpanElement>(null);
+  const availableVoicesRef = useRef<SpeechSynthesisVoice[]>([]);
+  const activeUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const speechSessionRef = useRef(0);
+  const speechParagraphRef = useRef<number | null>(null);
   const [paragraphs, setParagraphs] = useState(initialParagraphs);
   const [preferences, setPreferences] = useState(DEFAULT_PREFERENCES);
   const [preferencesReady, setPreferencesReady] = useState(false);
@@ -360,6 +370,9 @@ export function ReaderApp() {
   );
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [speakingParagraph, setSpeakingParagraph] = useState<number | null>(
+    null,
+  );
   const processTimer = useRef<number | null>(null);
   const statsTimer = useRef<number | null>(null);
 
@@ -438,6 +451,15 @@ export function ReaderApp() {
   }, [preferences, preferencesReady]);
 
   useEffect(() => {
+    const synthesis =
+      "speechSynthesis" in window ? window.speechSynthesis : null;
+    const refreshVoices = () => {
+      if (synthesis) availableVoicesRef.current = synthesis.getVoices();
+    };
+
+    refreshVoices();
+    synthesis?.addEventListener("voiceschanged", refreshVoices);
+
     return () => {
       if (processTimer.current !== null) {
         window.clearTimeout(processTimer.current);
@@ -445,7 +467,10 @@ export function ReaderApp() {
       if (statsTimer.current !== null) {
         window.clearTimeout(statsTimer.current);
       }
-      window.speechSynthesis?.cancel();
+      speechSessionRef.current += 1;
+      activeUtteranceRef.current = null;
+      synthesis?.removeEventListener("voiceschanged", refreshVoices);
+      synthesis?.cancel();
     };
   }, []);
 
@@ -455,6 +480,15 @@ export function ReaderApp() {
     },
     [],
   );
+
+  const cancelSpeech = useCallback(() => {
+    speechSessionRef.current += 1;
+    activeUtteranceRef.current = null;
+    speechParagraphRef.current = null;
+    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    setIsSpeaking(false);
+    setSpeakingParagraph(null);
+  }, []);
 
   const updateDraftStatsDisplay = useCallback((source: string) => {
     const words = countWords(source);
@@ -472,6 +506,11 @@ export function ReaderApp() {
     const source = event.currentTarget.value;
     draftTextRef.current = source;
 
+    if (isSpeaking) {
+      cancelSpeech();
+      setStatus("Đã dừng audio vì văn bản nguồn vừa thay đổi.");
+    }
+
     if (statsTimer.current !== null) {
       window.clearTimeout(statsTimer.current);
     }
@@ -485,6 +524,7 @@ export function ReaderApp() {
 
   const processInput = useCallback(() => {
     const source = inputRef.current?.value ?? draftTextRef.current;
+    cancelSpeech();
 
     if (source.trim().length < 20) {
       setError("Hãy nhập ít nhất 20 ký tự để tạo một bản đọc có ý nghĩa.");
@@ -502,6 +542,7 @@ export function ReaderApp() {
 
     processTimer.current = window.setTimeout(() => {
       const nextParagraphs = formatText(source);
+      processedSourceRef.current = source;
       setParagraphs(nextParagraphs);
       setActiveParagraph(0);
       setBookSpread(0);
@@ -511,7 +552,7 @@ export function ReaderApp() {
       );
       processTimer.current = null;
     }, 120);
-  }, []);
+  }, [cancelSpeech]);
 
   const handleInputKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
@@ -521,6 +562,7 @@ export function ReaderApp() {
   };
 
   const setLanguageProfile = (language: LanguageProfile) => {
+    if (isSpeaking) cancelSpeech();
     const currentDetectedLanguage =
       outputDetectedLanguage ??
       detectLanguage(inputRef.current?.value ?? draftTextRef.current);
@@ -658,38 +700,144 @@ export function ReaderApp() {
     }
 
     if (isSpeaking) {
-      window.speechSynthesis.cancel();
-      setIsSpeaking(false);
+      cancelSpeech();
       setStatus("Đã dừng đọc thành tiếng.");
       return;
     }
 
-    if (!outputText) {
+    const source = inputRef.current?.value ?? draftTextRef.current;
+    if (source.trim().length < 20) {
+      setError("Hãy nhập ít nhất 20 ký tự để bắt đầu nghe.");
+      setStatus("Chưa có đủ nội dung để đọc thành tiếng.");
+      return;
+    }
+
+    let speechParagraphs = paragraphs;
+    if (source !== processedSourceRef.current) {
+      if (processTimer.current !== null) {
+        window.clearTimeout(processTimer.current);
+        processTimer.current = null;
+      }
+
+      speechParagraphs = formatText(source);
+      processedSourceRef.current = source;
+      setParagraphs(speechParagraphs);
+      setActiveParagraph(0);
+      setBookSpread(0);
+      setError("");
+      setIsProcessing(false);
+    }
+
+    if (speechParagraphs.length === 0) {
       setStatus("Chưa có bản đọc để nghe.");
       return;
     }
 
-    const utterance = new SpeechSynthesisUtterance(outputText);
-    utterance.lang = activeLanguage === "vi" ? "vi-VN" : "en-US";
-    utterance.rate = activeLanguage === "vi" ? 0.92 : 0.96;
-    utterance.onend = () => {
+    const speechText = speechParagraphs.join("\n\n");
+    const speechLanguage: SpeechLanguage =
+      preferences.language === "auto"
+        ? detectLanguage(speechText)
+        : preferences.language;
+    const speechQueue = buildSpeechQueue(speechParagraphs);
+    if (speechQueue.length === 0) {
+      setStatus("Chưa có bản đọc để nghe.");
+      return;
+    }
+
+    const speechPageByParagraph: number[] = [];
+    if (preferences.layout === "book") {
+      paginateBookParagraphs(speechParagraphs, bookPageCapacity).forEach(
+        (page, pageIndex) => {
+          page.forEach((paragraph) => {
+            speechPageByParagraph[paragraph.index] = pageIndex;
+          });
+        },
+      );
+    }
+
+    const synthesis = window.speechSynthesis;
+    const currentVoices = synthesis.getVoices();
+    if (currentVoices.length > 0) availableVoicesRef.current = currentVoices;
+    const selectedVoice = chooseSpeechVoice(
+      availableVoicesRef.current,
+      speechLanguage,
+    );
+    const locale = speechLanguage === "vi" ? "vi-VN" : "en-US";
+    const session = speechSessionRef.current + 1;
+    speechSessionRef.current = session;
+    speechParagraphRef.current = null;
+    activeUtteranceRef.current = null;
+    synthesis.cancel();
+    setIsSpeaking(true);
+    setSpeakingParagraph(speechQueue[0].paragraphIndex);
+    setActiveParagraph(speechQueue[0].paragraphIndex);
+    setDraftDetectedLanguage(speechLanguage);
+    setStatus(
+      `Đang đọc đúng bản hiện tại bằng giọng ${speechLanguage === "vi" ? "Tiếng Việt" : "English"}.`,
+    );
+
+    const finishSpeech = (message: string) => {
+      if (speechSessionRef.current !== session) return;
+      activeUtteranceRef.current = null;
+      speechParagraphRef.current = null;
       setIsSpeaking(false);
-      setStatus("Đã đọc xong văn bản.");
-    };
-    utterance.onerror = () => {
-      setIsSpeaking(false);
-      setStatus("Không thể đọc thành tiếng trên thiết bị này.");
+      setSpeakingParagraph(null);
+      setStatus(message);
     };
 
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utterance);
-    setIsSpeaking(true);
-    setStatus(
-      `Đang đọc bằng giọng ${activeLanguage === "vi" ? "Tiếng Việt" : "English"}.`,
-    );
+    const speakChunk = (queueIndex: number) => {
+      if (speechSessionRef.current !== session) return;
+      const chunk = speechQueue[queueIndex];
+      if (!chunk) {
+        finishSpeech("Đã đọc xong toàn bộ bản hiện tại.");
+        return;
+      }
+
+      if (speechParagraphRef.current !== chunk.paragraphIndex) {
+        speechParagraphRef.current = chunk.paragraphIndex;
+        setSpeakingParagraph(chunk.paragraphIndex);
+        setActiveParagraph(chunk.paragraphIndex);
+
+        if (preferences.layout === "book") {
+          const pageIndex = speechPageByParagraph[chunk.paragraphIndex] ?? 0;
+          setBookSpread(Math.floor(pageIndex / 2));
+        }
+      }
+
+      const utterance = new SpeechSynthesisUtterance(chunk.text);
+      utterance.lang = locale;
+      utterance.rate = speechLanguage === "vi" ? 0.9 : 0.96;
+      utterance.pitch = 1;
+      if (selectedVoice) utterance.voice = selectedVoice;
+      activeUtteranceRef.current = utterance;
+
+      utterance.onend = () => {
+        if (speechSessionRef.current !== session) return;
+        activeUtteranceRef.current = null;
+        speakChunk(queueIndex + 1);
+      };
+      utterance.onerror = (event) => {
+        if (speechSessionRef.current !== session) return;
+        speechSessionRef.current += 1;
+        activeUtteranceRef.current = null;
+        speechParagraphRef.current = null;
+        setIsSpeaking(false);
+        setSpeakingParagraph(null);
+        setStatus(
+          event.error === "not-allowed"
+            ? "Trình duyệt đang chặn audio. Hãy cho phép phát âm thanh rồi thử lại."
+            : "Audio đã bị gián đoạn. Hãy chọn Nghe bài để bắt đầu lại.",
+        );
+      };
+
+      synthesis.speak(utterance);
+    };
+
+    speakChunk(0);
   };
 
   const clearText = () => {
+    cancelSpeech();
     if (processTimer.current !== null) {
       window.clearTimeout(processTimer.current);
       processTimer.current = null;
@@ -700,6 +848,7 @@ export function ReaderApp() {
     }
     if (inputRef.current) inputRef.current.value = "";
     draftTextRef.current = "";
+    processedSourceRef.current = "";
     updateDraftStatsDisplay("");
     setDraftDetectedLanguage("en");
     setParagraphs([]);
@@ -707,12 +856,11 @@ export function ReaderApp() {
     setIsProcessing(false);
     setActiveParagraph(0);
     setBookSpread(0);
-    window.speechSynthesis?.cancel();
-    setIsSpeaking(false);
     setStatus("Đã xóa văn bản. Nội dung không được lưu trên máy chủ.");
   };
 
   const restoreSample = () => {
+    cancelSpeech();
     if (processTimer.current !== null) {
       window.clearTimeout(processTimer.current);
       processTimer.current = null;
@@ -723,6 +871,7 @@ export function ReaderApp() {
     }
     if (inputRef.current) inputRef.current.value = SAMPLE_TEXT;
     draftTextRef.current = SAMPLE_TEXT;
+    processedSourceRef.current = SAMPLE_TEXT;
     updateDraftStatsDisplay(SAMPLE_TEXT);
     setDraftDetectedLanguage(detectLanguage(SAMPLE_TEXT));
     setParagraphs(initialParagraphs);
@@ -747,37 +896,44 @@ export function ReaderApp() {
     "--reader-font-family": FONT_STACKS[preferences.font],
   } as CSSProperties;
 
-  const renderParagraph = (paragraph: string, index: number) => (
-    <p
-      key={`${paragraph.slice(0, 28)}-${index}`}
-      className={
-        preferences.focusMode
-          ? index === activeParagraph
-            ? "is-current"
-            : "is-dimmed"
-          : undefined
-      }
-      role={preferences.focusMode ? "button" : undefined}
-      tabIndex={preferences.focusMode ? 0 : undefined}
-      aria-current={
-        preferences.focusMode && index === activeParagraph ? "true" : undefined
-      }
-      onClick={() => {
-        if (preferences.focusMode) selectParagraph(index);
-      }}
-      onKeyDown={(event) => {
-        if (
-          preferences.focusMode &&
-          (event.key === "Enter" || event.key === " ")
-        ) {
-          event.preventDefault();
-          selectParagraph(index);
-        }
-      }}
-    >
-      {paragraph}
-    </p>
-  );
+  const renderParagraph = (paragraph: string, index: number) => {
+    const isCurrent = preferences.focusMode && index === activeParagraph;
+    const isSpoken = isSpeaking && index === speakingParagraph;
+    const paragraphClassName = [
+      preferences.focusMode
+        ? isCurrent
+          ? "is-current"
+          : "is-dimmed"
+        : "",
+      isSpoken ? "is-speaking" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    return (
+      <p
+        key={`${paragraph.slice(0, 28)}-${index}`}
+        className={paragraphClassName || undefined}
+        role={preferences.focusMode ? "button" : undefined}
+        tabIndex={preferences.focusMode ? 0 : undefined}
+        aria-current={isCurrent || isSpoken ? "true" : undefined}
+        onClick={() => {
+          if (preferences.focusMode) selectParagraph(index);
+        }}
+        onKeyDown={(event) => {
+          if (
+            preferences.focusMode &&
+            (event.key === "Enter" || event.key === " ")
+          ) {
+            event.preventDefault();
+            selectParagraph(index);
+          }
+        }}
+      >
+        {paragraph}
+      </p>
+    );
+  };
 
   return (
     <main
@@ -868,6 +1024,11 @@ export function ReaderApp() {
                   {preferences.layout === "book" && paragraphs.length > 0 ? (
                     <span>{bookDisplayPageCount} trang</span>
                   ) : null}
+                  {isSpeaking && speakingParagraph !== null ? (
+                    <span>
+                      Audio đoạn {speakingParagraph + 1} / {paragraphs.length}
+                    </span>
+                  ) : null}
                 </div>
               </div>
 
@@ -879,6 +1040,11 @@ export function ReaderApp() {
                   type="button"
                   onClick={toggleSpeech}
                   aria-pressed={isSpeaking}
+                  aria-label={
+                    isSpeaking
+                      ? "Dừng đọc thành tiếng"
+                      : "Nghe đúng bản đọc hiện tại"
+                  }
                 >
                   {isSpeaking ? "Dừng đọc" : "Nghe bài"}
                 </button>

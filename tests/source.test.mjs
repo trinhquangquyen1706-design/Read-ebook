@@ -1,10 +1,32 @@
 import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import test from "node:test";
+import vm from "node:vm";
+import ts from "typescript";
+
+async function loadSpeechHelpers() {
+  const source = await readFile(
+    new URL("../app/speech.ts", import.meta.url),
+    "utf8",
+  );
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const sandboxModule = { exports: {} };
+  vm.runInNewContext(compiled, {
+    module: sandboxModule,
+    exports: sandboxModule.exports,
+  });
+  return sandboxModule.exports;
+}
 
 test("contains the bilingual reader experience", async () => {
-  const [reader, css, layout, page] = await Promise.all([
+  const [reader, speech, css, layout, page] = await Promise.all([
     readFile(new URL("../app/reader-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/speech.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
@@ -26,8 +48,14 @@ test("contains the bilingual reader experience", async () => {
   assert.doesNotMatch(reader, /countWords\(input\)/);
   assert.doesNotMatch(reader, /value=\{input\}/);
   assert.match(reader, /\.textContent/);
+  assert.match(reader, /processedSourceRef/);
+  assert.match(reader, /speechSessionRef/);
+  assert.match(reader, /voiceschanged/);
+  assert.match(speech, /buildSpeechQueue/);
+  assert.match(speech, /chooseSpeechVoice/);
   assert.match(css, /\.book-spread/);
   assert.match(css, /\.book-gutter/);
+  assert.match(css, /\.is-speaking/);
   assert.match(css, /@container reader/);
   assert.match(css, /prefers-reduced-motion: reduce/);
   assert.match(css, /reader-app\[data-theme="sepia"\]/);
@@ -35,7 +63,39 @@ test("contains the bilingual reader experience", async () => {
   assert.match(layout, /<html lang="vi">/);
   assert.match(page, /ReaderApp/);
 
-  assert.doesNotMatch([reader, css, layout, page].join("\n"), /[—–]/u);
+  assert.doesNotMatch(
+    [reader, speech, css, layout, page].join("\n"),
+    /[—–]/u,
+  );
+});
+
+test("keeps long-form speech in exact paragraph order", async () => {
+  const { buildSpeechQueue, chooseSpeechVoice } = await loadSpeechHelpers();
+  const paragraphs = [
+    "Đây là đoạn tiếng Việt đủ dài để kiểm tra việc chia audio theo dấu câu. " +
+      "Mỗi cụm phải giữ nguyên thứ tự từ và không được bỏ mất nội dung. ".repeat(
+        5,
+      ),
+    "This second paragraph must begin only after the first paragraph ends.",
+  ];
+  const queue = buildSpeechQueue(paragraphs, 140);
+
+  assert.ok(queue.length > paragraphs.length);
+  assert.ok(queue.every((chunk) => chunk.text.length <= 140));
+  for (const [paragraphIndex, paragraph] of paragraphs.entries()) {
+    const reconstructed = queue
+      .filter((chunk) => chunk.paragraphIndex === paragraphIndex)
+      .map((chunk) => chunk.text)
+      .join(" ");
+    assert.equal(reconstructed, paragraph.replace(/\s+/g, " ").trim());
+  }
+
+  const voices = [
+    { lang: "en-US", localService: true, name: "English Local" },
+    { lang: "vi-VN", localService: false, name: "Vietnam Remote" },
+    { lang: "vi_VN", localService: true, name: "Vietnam Local" },
+  ];
+  assert.equal(chooseSpeechVoice(voices, "vi").name, "Vietnam Local");
 });
 
 test("uses a clean Next.js deployment shape", async () => {
