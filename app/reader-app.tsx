@@ -6,12 +6,14 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
   type CSSProperties,
   type KeyboardEvent,
 } from "react";
 
 type Theme = "night" | "sepia" | "light";
 type LanguageProfile = "auto" | "vi" | "en";
+type ReaderLayout = "continuous" | "book";
 type ReaderFont =
   | "lora"
   | "source-serif"
@@ -26,14 +28,22 @@ type Preferences = {
   fontSize: number;
   lineHeight: number;
   lineWidth: number;
+  layout: ReaderLayout;
   focusMode: boolean;
+};
+
+type BookParagraph = {
+  index: number;
+  text: string;
 };
 
 const SAMPLE_TEXT = `Đọc trên màn hình thường khó hơn đọc trên giấy vì mắt phải liên tục tìm điểm bắt đầu của dòng mới. Khi một đoạn văn quá dài, khoảng trắng biến mất và người đọc dễ bỏ sót ý chính.
 
 Dễ Đọc xử lý văn bản ngay trong trình duyệt. Công cụ nối lại những dòng bị ngắt khi sao chép từ PDF, làm sạch khoảng trắng và chia nội dung thành các đoạn có nhịp vừa phải. Văn bản của bạn không được gửi lên máy chủ.
 
-Bạn có thể chọn kiểu chữ phù hợp cho tiếng Việt hoặc tiếng Anh, thay đổi cỡ chữ, độ giãn dòng và chiều rộng cột đọc. Khi cần tập trung, hãy bật chế độ Tập trung để chỉ giữ đoạn hiện tại ở độ tương phản cao. Dùng phím mũi tên lên và xuống để chuyển giữa các đoạn.`;
+Bạn có thể chọn kiểu chữ phù hợp cho tiếng Việt hoặc tiếng Anh, thay đổi cỡ chữ, độ giãn dòng và chiều rộng cột đọc. Khi cần tập trung, hãy bật chế độ Tập trung để chỉ giữ đoạn hiện tại ở độ tương phản cao. Dùng phím mũi tên lên và xuống để chuyển giữa các đoạn.
+
+Với bố cục Hai trang, nội dung được chia thành từng cặp trang đối diện như một cuốn sách mở. Nút Trang trước và Trang sau giúp bạn đi qua bài viết theo nhịp rõ ràng, trong khi số trang luôn cho biết vị trí hiện tại.`;
 
 const STORAGE_KEY = "de-doc-preferences-v1";
 
@@ -44,6 +54,7 @@ const DEFAULT_PREFERENCES: Preferences = {
   fontSize: 20,
   lineHeight: 1.75,
   lineWidth: 66,
+  layout: "book",
   focusMode: false,
 };
 
@@ -99,6 +110,11 @@ const LANGUAGES: Array<{ id: LanguageProfile; label: string }> = [
   { id: "en", label: "English" },
 ];
 
+const READER_LAYOUTS: Array<{ id: ReaderLayout; label: string }> = [
+  { id: "continuous", label: "Một trang" },
+  { id: "book", label: "Hai trang" },
+];
+
 function clamp(value: unknown, min: number, max: number, fallback: number) {
   return typeof value === "number" && Number.isFinite(value)
     ? Math.min(max, Math.max(min, value))
@@ -110,6 +126,7 @@ function readPreferences(value: string): Preferences | null {
     const parsed = JSON.parse(value) as Partial<Preferences>;
     const themes: Theme[] = ["night", "sepia", "light"];
     const languages: LanguageProfile[] = ["auto", "vi", "en"];
+    const layouts: ReaderLayout[] = ["continuous", "book"];
     const fonts: ReaderFont[] = [
       "lora",
       "source-serif",
@@ -141,6 +158,9 @@ function readPreferences(value: string): Preferences | null {
         82,
         DEFAULT_PREFERENCES.lineWidth,
       ),
+      layout: layouts.includes(parsed.layout as ReaderLayout)
+        ? (parsed.layout as ReaderLayout)
+        : DEFAULT_PREFERENCES.layout,
       focusMode:
         typeof parsed.focusMode === "boolean"
           ? parsed.focusMode
@@ -259,6 +279,39 @@ function countWords(text: string) {
   );
 }
 
+function getBookPageCapacity(
+  fontSize: number,
+  lineHeight: number,
+  lineWidth: number,
+) {
+  const scale = (20 / fontSize) * (1.75 / lineHeight) * (lineWidth / 66);
+  return Math.round(Math.min(260, Math.max(85, 155 * scale)));
+}
+
+function paginateBookParagraphs(paragraphs: string[], capacity: number) {
+  const pages: BookParagraph[][] = [];
+  let currentPage: BookParagraph[] = [];
+  let currentWords = 0;
+
+  paragraphs.forEach((text, index) => {
+    const paragraphWords = Math.max(1, countWords(text));
+    const pageWouldOverflow =
+      currentPage.length > 0 && currentWords + paragraphWords > capacity;
+
+    if (pageWouldOverflow) {
+      pages.push(currentPage);
+      currentPage = [];
+      currentWords = 0;
+    }
+
+    currentPage.push({ index, text });
+    currentWords += paragraphWords;
+  });
+
+  if (currentPage.length > 0) pages.push(currentPage);
+  return pages;
+}
+
 function detectLanguage(text: string): "vi" | "en" {
   const lower = text.toLocaleLowerCase("vi");
   const markedCharacters = lower.match(/[ăâđêôơưáàảãạấầẩẫậắằẳẵặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ]/gu)
@@ -289,11 +342,18 @@ function suggestedFont(language: LanguageProfile, detected: "vi" | "en") {
 
 export function ReaderApp() {
   const initialParagraphs = useMemo(() => formatText(SAMPLE_TEXT), []);
-  const [input, setInput] = useState(SAMPLE_TEXT);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const draftTextRef = useRef(SAMPLE_TEXT);
+  const draftCharactersRef = useRef<HTMLSpanElement>(null);
+  const draftWordsRef = useRef<HTMLSpanElement>(null);
   const [paragraphs, setParagraphs] = useState(initialParagraphs);
   const [preferences, setPreferences] = useState(DEFAULT_PREFERENCES);
   const [preferencesReady, setPreferencesReady] = useState(false);
   const [activeParagraph, setActiveParagraph] = useState(0);
+  const [bookSpread, setBookSpread] = useState(0);
+  const [draftDetectedLanguage, setDraftDetectedLanguage] = useState<
+    "vi" | "en"
+  >(() => detectLanguage(SAMPLE_TEXT));
   const [error, setError] = useState("");
   const [status, setStatus] = useState(
     "Văn bản chỉ được xử lý trong trình duyệt.",
@@ -301,23 +361,62 @@ export function ReaderApp() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const processTimer = useRef<number | null>(null);
+  const statsTimer = useRef<number | null>(null);
 
   const outputText = useMemo(() => paragraphs.join("\n\n"), [paragraphs]);
   const wordCount = useMemo(() => countWords(outputText), [outputText]);
-  const detectedLanguage = useMemo(
-    () => detectLanguage(outputText || input),
-    [input, outputText],
+  const outputDetectedLanguage = useMemo(
+    () => (outputText ? detectLanguage(outputText) : null),
+    [outputText],
   );
+  const detectedLanguage =
+    outputDetectedLanguage ?? draftDetectedLanguage;
   const activeLanguage =
     preferences.language === "auto"
       ? detectedLanguage
       : preferences.language;
-  const readingMinutes = Math.max(
-    1,
-    Math.ceil(wordCount / (activeLanguage === "vi" ? 200 : 230)),
-  );
+  const readingMinutes =
+    wordCount === 0
+      ? 0
+      : Math.max(
+          1,
+          Math.ceil(wordCount / (activeLanguage === "vi" ? 200 : 230)),
+        );
   const currentFont =
     FONT_OPTIONS.find((font) => font.id === preferences.font) ?? FONT_OPTIONS[0];
+  const bookPageCapacity = useMemo(
+    () =>
+      getBookPageCapacity(
+        preferences.fontSize,
+        preferences.lineHeight,
+        preferences.lineWidth,
+      ),
+    [
+      preferences.fontSize,
+      preferences.lineHeight,
+      preferences.lineWidth,
+    ],
+  );
+  const bookPages = useMemo(
+    () => paginateBookParagraphs(paragraphs, bookPageCapacity),
+    [bookPageCapacity, paragraphs],
+  );
+  const bookDisplayPageCount = Math.max(
+    2,
+    bookPages.length + (bookPages.length % 2),
+  );
+  const bookSpreadCount = Math.max(1, bookDisplayPageCount / 2);
+  const currentBookSpread = Math.min(bookSpread, bookSpreadCount - 1);
+  const firstBookPageIndex = currentBookSpread * 2;
+  const paragraphBookPages = useMemo(() => {
+    const pageByParagraph: number[] = [];
+    bookPages.forEach((page, pageIndex) => {
+      page.forEach((paragraph) => {
+        pageByParagraph[paragraph.index] = pageIndex;
+      });
+    });
+    return pageByParagraph;
+  }, [bookPages]);
 
   useEffect(() => {
     try {
@@ -343,6 +442,9 @@ export function ReaderApp() {
       if (processTimer.current !== null) {
         window.clearTimeout(processTimer.current);
       }
+      if (statsTimer.current !== null) {
+        window.clearTimeout(statsTimer.current);
+      }
       window.speechSynthesis?.cancel();
     };
   }, []);
@@ -354,8 +456,37 @@ export function ReaderApp() {
     [],
   );
 
+  const updateDraftStatsDisplay = useCallback((source: string) => {
+    const words = countWords(source);
+    if (draftCharactersRef.current) {
+      draftCharactersRef.current.textContent =
+        source.length.toLocaleString("vi-VN");
+    }
+    if (draftWordsRef.current) {
+      draftWordsRef.current.textContent = words.toLocaleString("vi-VN");
+    }
+    return detectLanguage(source);
+  }, []);
+
+  const handleDraftChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
+    const source = event.currentTarget.value;
+    draftTextRef.current = source;
+
+    if (statsTimer.current !== null) {
+      window.clearTimeout(statsTimer.current);
+    }
+
+    statsTimer.current = window.setTimeout(() => {
+      const nextLanguage = updateDraftStatsDisplay(source);
+      if (!outputText) setDraftDetectedLanguage(nextLanguage);
+      statsTimer.current = null;
+    }, 160);
+  };
+
   const processInput = useCallback(() => {
-    if (input.trim().length < 20) {
+    const source = inputRef.current?.value ?? draftTextRef.current;
+
+    if (source.trim().length < 20) {
       setError("Hãy nhập ít nhất 20 ký tự để tạo một bản đọc có ý nghĩa.");
       setStatus("Chưa thể định dạng văn bản.");
       return;
@@ -370,16 +501,17 @@ export function ReaderApp() {
     }
 
     processTimer.current = window.setTimeout(() => {
-      const nextParagraphs = formatText(input);
+      const nextParagraphs = formatText(source);
       setParagraphs(nextParagraphs);
       setActiveParagraph(0);
+      setBookSpread(0);
       setIsProcessing(false);
       setStatus(
-        `Đã tạo ${nextParagraphs.length} đoạn dễ đọc từ ${countWords(input)} từ.`,
+        `Đã tạo ${nextParagraphs.length} đoạn dễ đọc từ ${countWords(source)} từ.`,
       );
       processTimer.current = null;
     }, 120);
-  }, [input]);
+  }, []);
 
   const handleInputKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
@@ -389,23 +521,41 @@ export function ReaderApp() {
   };
 
   const setLanguageProfile = (language: LanguageProfile) => {
+    const currentDetectedLanguage =
+      outputDetectedLanguage ??
+      detectLanguage(inputRef.current?.value ?? draftTextRef.current);
+    setDraftDetectedLanguage(currentDetectedLanguage);
     updatePreferences({
       language,
-      font: suggestedFont(language, detectedLanguage),
+      font: suggestedFont(language, currentDetectedLanguage),
     });
     const languageLabel =
       language === "auto"
-        ? `Auto, đang nhận diện ${detectedLanguage === "vi" ? "Tiếng Việt" : "English"}`
+        ? `Auto, đang nhận diện ${currentDetectedLanguage === "vi" ? "Tiếng Việt" : "English"}`
         : language === "vi"
           ? "Tiếng Việt"
           : "English";
     setStatus(`Đã chọn hồ sơ ${languageLabel}.`);
   };
 
+  const setReaderLayout = (layout: ReaderLayout) => {
+    updatePreferences({ layout });
+    setBookSpread(0);
+    if (preferences.focusMode) setActiveParagraph(0);
+    setStatus(
+      layout === "book"
+        ? "Đã bật bố cục Hai trang. Dùng Trang trước và Trang sau để lật trang."
+        : "Đã chuyển về bố cục Một trang.",
+    );
+  };
+
   const toggleFocusMode = () => {
     const next = !preferences.focusMode;
     updatePreferences({ focusMode: next });
-    if (next) setActiveParagraph(0);
+    if (next) {
+      setActiveParagraph(0);
+      setBookSpread(0);
+    }
     setStatus(
       next
         ? "Đã bật Tập trung. Chọn một đoạn hoặc dùng phím mũi tên."
@@ -413,16 +563,69 @@ export function ReaderApp() {
     );
   };
 
+  const selectParagraph = useCallback(
+    (index: number) => {
+      const next = Math.min(
+        Math.max(0, paragraphs.length - 1),
+        Math.max(0, index),
+      );
+      setActiveParagraph(next);
+
+      if (preferences.layout === "book") {
+        const pageIndex = paragraphBookPages[next] ?? 0;
+        setBookSpread(Math.floor(pageIndex / 2));
+      }
+    },
+    [paragraphBookPages, paragraphs.length, preferences.layout],
+  );
+
   const moveParagraph = useCallback(
     (direction: -1 | 1) => {
-      setActiveParagraph((current) =>
-        Math.min(paragraphs.length - 1, Math.max(0, current + direction)),
+      selectParagraph(activeParagraph + direction);
+    },
+    [activeParagraph, selectParagraph],
+  );
+
+  const moveBookSpread = useCallback(
+    (direction: -1 | 1) => {
+      const next = Math.min(
+        bookSpreadCount - 1,
+        Math.max(0, currentBookSpread + direction),
+      );
+      if (next === currentBookSpread) return;
+
+      setBookSpread(next);
+      const firstParagraph =
+        bookPages[next * 2]?.[0] ?? bookPages[next * 2 + 1]?.[0];
+      if (preferences.focusMode && firstParagraph) {
+        setActiveParagraph(firstParagraph.index);
+      }
+
+      const firstPage = next * 2 + 1;
+      setStatus(
+        `Đang xem trang ${firstPage} và ${Math.min(firstPage + 1, bookDisplayPageCount)}.`,
       );
     },
-    [paragraphs.length],
+    [
+      bookDisplayPageCount,
+      bookPages,
+      bookSpreadCount,
+      currentBookSpread,
+      preferences.focusMode,
+    ],
   );
 
   const handleReaderKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (preferences.layout === "book" && event.key === "ArrowRight") {
+      event.preventDefault();
+      moveBookSpread(1);
+      return;
+    }
+    if (preferences.layout === "book" && event.key === "ArrowLeft") {
+      event.preventDefault();
+      moveBookSpread(-1);
+      return;
+    }
     if (!preferences.focusMode) return;
     if (event.key === "ArrowDown") {
       event.preventDefault();
@@ -491,26 +694,48 @@ export function ReaderApp() {
       window.clearTimeout(processTimer.current);
       processTimer.current = null;
     }
-    setInput("");
+    if (statsTimer.current !== null) {
+      window.clearTimeout(statsTimer.current);
+      statsTimer.current = null;
+    }
+    if (inputRef.current) inputRef.current.value = "";
+    draftTextRef.current = "";
+    updateDraftStatsDisplay("");
+    setDraftDetectedLanguage("en");
     setParagraphs([]);
     setError("");
     setIsProcessing(false);
     setActiveParagraph(0);
+    setBookSpread(0);
     window.speechSynthesis?.cancel();
     setIsSpeaking(false);
     setStatus("Đã xóa văn bản. Nội dung không được lưu trên máy chủ.");
   };
 
   const restoreSample = () => {
-    setInput(SAMPLE_TEXT);
+    if (processTimer.current !== null) {
+      window.clearTimeout(processTimer.current);
+      processTimer.current = null;
+    }
+    if (statsTimer.current !== null) {
+      window.clearTimeout(statsTimer.current);
+      statsTimer.current = null;
+    }
+    if (inputRef.current) inputRef.current.value = SAMPLE_TEXT;
+    draftTextRef.current = SAMPLE_TEXT;
+    updateDraftStatsDisplay(SAMPLE_TEXT);
+    setDraftDetectedLanguage(detectLanguage(SAMPLE_TEXT));
     setParagraphs(initialParagraphs);
     setActiveParagraph(0);
+    setBookSpread(0);
     setError("");
+    setIsProcessing(false);
     setStatus("Đã khôi phục văn bản mẫu.");
   };
 
   const resetSettings = () => {
     setPreferences(DEFAULT_PREFERENCES);
+    setBookSpread(0);
     setStatus("Đã đưa cài đặt đọc về mặc định.");
   };
 
@@ -518,8 +743,41 @@ export function ReaderApp() {
     "--reader-font-size": `${preferences.fontSize}px`,
     "--reader-line-height": preferences.lineHeight,
     "--reader-line-width": `${preferences.lineWidth}ch`,
+    "--reader-spread-width": `${Math.round(preferences.lineWidth * 1.72)}ch`,
     "--reader-font-family": FONT_STACKS[preferences.font],
   } as CSSProperties;
+
+  const renderParagraph = (paragraph: string, index: number) => (
+    <p
+      key={`${paragraph.slice(0, 28)}-${index}`}
+      className={
+        preferences.focusMode
+          ? index === activeParagraph
+            ? "is-current"
+            : "is-dimmed"
+          : undefined
+      }
+      role={preferences.focusMode ? "button" : undefined}
+      tabIndex={preferences.focusMode ? 0 : undefined}
+      aria-current={
+        preferences.focusMode && index === activeParagraph ? "true" : undefined
+      }
+      onClick={() => {
+        if (preferences.focusMode) selectParagraph(index);
+      }}
+      onKeyDown={(event) => {
+        if (
+          preferences.focusMode &&
+          (event.key === "Enter" || event.key === " ")
+        ) {
+          event.preventDefault();
+          selectParagraph(index);
+        }
+      }}
+    >
+      {paragraph}
+    </p>
+  );
 
   return (
     <main
@@ -555,16 +813,27 @@ export function ReaderApp() {
               <label htmlFor="source-text">Dán nội dung cần đọc</label>
               <textarea
                 id="source-text"
-                value={input}
+                ref={inputRef}
+                defaultValue={SAMPLE_TEXT}
                 maxLength={120000}
-                onChange={(event) => setInput(event.target.value)}
+                onChange={handleDraftChange}
                 onKeyDown={handleInputKeyDown}
                 aria-describedby="source-helper source-error"
                 placeholder="Dán bài viết, ghi chú hoặc nội dung sao chép từ PDF vào đây."
               />
               <div className="input-meta" id="source-helper">
-                <span>{input.length.toLocaleString("vi-VN")} ký tự</span>
-                <span>{countWords(input).toLocaleString("vi-VN")} từ</span>
+                <span>
+                  <span ref={draftCharactersRef}>
+                    {SAMPLE_TEXT.length.toLocaleString("vi-VN")}
+                  </span>{" "}
+                  ký tự
+                </span>
+                <span>
+                  <span ref={draftWordsRef}>
+                    {countWords(SAMPLE_TEXT).toLocaleString("vi-VN")}
+                  </span>{" "}
+                  từ
+                </span>
               </div>
               <p className="error-message" id="source-error" aria-live="polite">
                 {error}
@@ -596,6 +865,9 @@ export function ReaderApp() {
                   <span>{wordCount.toLocaleString("vi-VN")} từ</span>
                   <span>{readingMinutes} phút đọc</span>
                   <span>{paragraphs.length} đoạn</span>
+                  {preferences.layout === "book" && paragraphs.length > 0 ? (
+                    <span>{bookDisplayPageCount} trang</span>
+                  ) : null}
                 </div>
               </div>
 
@@ -636,6 +908,25 @@ export function ReaderApp() {
                       aria-pressed={preferences.language === language.id}
                     >
                       {language.label}
+                    </button>
+                  ))}
+                </div>
+              </fieldset>
+
+              <fieldset className="setting-group layout-group">
+                <legend>Bố cục</legend>
+                <div className="segmented-control">
+                  {READER_LAYOUTS.map((layout) => (
+                    <button
+                      key={layout.id}
+                      type="button"
+                      className={
+                        preferences.layout === layout.id ? "is-active" : ""
+                      }
+                      onClick={() => setReaderLayout(layout.id)}
+                      aria-pressed={preferences.layout === layout.id}
+                    >
+                      {layout.label}
                     </button>
                   ))}
                 </div>
@@ -754,53 +1045,114 @@ export function ReaderApp() {
               </div>
             ) : null}
 
-            <div className="reader-canvas">
+            <div
+              className={`reader-canvas${
+                preferences.layout === "book" ? " is-book-canvas" : ""
+              }`}
+              style={readerStyle}
+            >
               {paragraphs.length > 0 ? (
-                <article
-                  className={`reader-copy${preferences.focusMode ? " focus-copy" : ""}`}
-                  style={readerStyle}
-                  tabIndex={preferences.focusMode ? 0 : undefined}
-                  onKeyDown={handleReaderKeyDown}
-                  aria-label={
-                    preferences.focusMode
-                      ? "Bản đọc ở chế độ tập trung. Dùng phím mũi tên lên và xuống để đổi đoạn."
-                      : "Bản đọc đã định dạng"
-                  }
-                >
-                  {paragraphs.map((paragraph, index) => (
-                    <p
-                      key={`${paragraph.slice(0, 28)}-${index}`}
-                      className={
-                        preferences.focusMode
-                          ? index === activeParagraph
-                            ? "is-current"
-                            : "is-dimmed"
-                          : undefined
-                      }
-                      role={preferences.focusMode ? "button" : undefined}
-                      tabIndex={preferences.focusMode ? 0 : undefined}
-                      aria-current={
-                        preferences.focusMode && index === activeParagraph
-                          ? "true"
-                          : undefined
-                      }
-                      onClick={() => {
-                        if (preferences.focusMode) setActiveParagraph(index);
-                      }}
-                      onKeyDown={(event) => {
-                        if (
-                          preferences.focusMode &&
-                          (event.key === "Enter" || event.key === " ")
-                        ) {
-                          event.preventDefault();
-                          setActiveParagraph(index);
-                        }
-                      }}
+                preferences.layout === "book" ? (
+                  <>
+                    <nav
+                      className="book-navigation"
+                      aria-label="Điều hướng trang sách"
                     >
-                      {paragraph}
-                    </p>
-                  ))}
-                </article>
+                      <button
+                        type="button"
+                        onClick={() => moveBookSpread(-1)}
+                        disabled={currentBookSpread === 0}
+                      >
+                        Trang trước
+                      </button>
+                      <p aria-live="polite">
+                        Trang {firstBookPageIndex + 1} và{" "}
+                        {Math.min(
+                          firstBookPageIndex + 2,
+                          bookDisplayPageCount,
+                        )}{" "}
+                        / {bookDisplayPageCount}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => moveBookSpread(1)}
+                        disabled={currentBookSpread === bookSpreadCount - 1}
+                      >
+                        Trang sau
+                      </button>
+                    </nav>
+
+                    <article
+                      className={`book-reader${
+                        preferences.focusMode ? " focus-copy" : ""
+                      }`}
+                      tabIndex={0}
+                      onKeyDown={handleReaderKeyDown}
+                      aria-label={
+                        preferences.focusMode
+                          ? "Bản đọc hai trang ở chế độ tập trung. Dùng phím mũi tên để đổi đoạn hoặc lật trang."
+                          : "Bản đọc hai trang. Dùng phím mũi tên trái và phải để lật trang."
+                      }
+                    >
+                      <div
+                        className="book-spread"
+                        role="group"
+                        aria-label={`Trang ${firstBookPageIndex + 1} và ${Math.min(
+                          firstBookPageIndex + 2,
+                          bookDisplayPageCount,
+                        )}`}
+                      >
+                        {[0, 1].map((slot) => {
+                          const pageIndex = firstBookPageIndex + slot;
+                          const pageNumber = pageIndex + 1;
+                          const page = bookPages[pageIndex] ?? [];
+
+                          return (
+                            <section
+                              key={pageNumber}
+                              className={`book-page book-page-${
+                                slot === 0 ? "left" : "right"
+                              }`}
+                              aria-label={`Trang ${pageNumber}`}
+                            >
+                              <div className="book-page-copy">
+                                {page.length > 0 ? (
+                                  page.map((paragraph) =>
+                                    renderParagraph(
+                                      paragraph.text,
+                                      paragraph.index,
+                                    ),
+                                  )
+                                ) : (
+                                  <p className="book-empty-page">Hết bản đọc</p>
+                                )}
+                              </div>
+                              <span className="book-page-number" aria-hidden="true">
+                                {pageNumber}
+                              </span>
+                            </section>
+                          );
+                        })}
+                        <span className="book-gutter" aria-hidden="true" />
+                      </div>
+                    </article>
+                  </>
+                ) : (
+                  <article
+                    className={`reader-copy${
+                      preferences.focusMode ? " focus-copy" : ""
+                    }`}
+                    tabIndex={preferences.focusMode ? 0 : undefined}
+                    onKeyDown={handleReaderKeyDown}
+                    aria-label={
+                      preferences.focusMode
+                        ? "Bản đọc ở chế độ tập trung. Dùng phím mũi tên lên và xuống để đổi đoạn."
+                        : "Bản đọc đã định dạng"
+                    }
+                  >
+                    {paragraphs.map(renderParagraph)}
+                  </article>
+                )
               ) : (
                 <div className="empty-state">
                   <p className="empty-title">Không gian đọc đang trống.</p>
@@ -816,7 +1168,13 @@ export function ReaderApp() {
               <p className="status-line" aria-live="polite">
                 {status}
               </p>
-              {preferences.focusMode ? (
+              {paragraphs.length > 0 && preferences.layout === "book" ? (
+                <p className="focus-hint">
+                  {preferences.focusMode
+                    ? "Mũi tên lên, xuống đổi đoạn; trái, phải lật trang."
+                    : "Chọn khung sách rồi dùng mũi tên trái và phải để lật trang."}
+                </p>
+              ) : preferences.focusMode ? (
                 <p className="focus-hint">
                   Chọn một đoạn hoặc dùng phím mũi tên lên và xuống.
                 </p>

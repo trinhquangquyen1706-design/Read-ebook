@@ -17,6 +17,18 @@ test("contains the bilingual reader experience", async () => {
   assert.match(reader, /Source Serif 4/);
   assert.match(reader, /Ctrl \+ Enter/);
   assert.match(reader, /aria-live="polite"/);
+  assert.match(reader, /paginateBookParagraphs/);
+  assert.match(reader, /getBookPageCapacity/);
+  assert.match(reader, /Hai trang/);
+  assert.match(reader, /defaultValue=\{SAMPLE_TEXT\}/);
+  assert.match(reader, /draftTextRef/);
+  assert.match(reader, /statsTimer/);
+  assert.doesNotMatch(reader, /countWords\(input\)/);
+  assert.doesNotMatch(reader, /value=\{input\}/);
+  assert.match(reader, /\.textContent/);
+  assert.match(css, /\.book-spread/);
+  assert.match(css, /\.book-gutter/);
+  assert.match(css, /@container reader/);
   assert.match(css, /prefers-reduced-motion: reduce/);
   assert.match(css, /reader-app\[data-theme="sepia"\]/);
   assert.match(css, /reader-app\[data-theme="light"\]/);
