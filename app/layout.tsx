@@ -30,6 +30,9 @@ export const metadata: Metadata = {
   },
   description:
     "Công cụ định dạng lại văn bản dài để đọc thoáng và tập trung hơn.",
+  icons: {
+    icon: "/favicon.svg",
+  },
 };
 
 export default function RootLayout({
