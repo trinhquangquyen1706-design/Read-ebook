@@ -597,8 +597,9 @@ button.is-active,
 }
 
 .reader-canvas.is-book-canvas {
-  padding: clamp(24px, 3.6vw, 52px) clamp(16px, 3.6vw, 58px)
-    clamp(34px, 4.5vw, 66px);
+  padding: clamp(20px, 3vw, 44px) clamp(12px, 2.4vw, 42px)
+    clamp(30px, 4vw, 58px);
+  font-size: var(--reader-font-size);
   background:
     radial-gradient(circle at 50% 10%, var(--ambient), transparent 42rem),
     var(--reader-deep);
@@ -641,13 +642,14 @@ button.is-active,
   width: min(100%, var(--reader-spread-width));
   margin: 0 auto;
   outline: none;
+  font-size: clamp(70%, 2.15cqi, 100%);
 }
 
 .book-spread {
   position: relative;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  padding: 10px;
+  padding: clamp(6px, 1cqi, 10px);
   border: 1px solid var(--book-page-edge);
   border-radius: 20px;
   background: var(--book-cover);
@@ -658,8 +660,9 @@ button.is-active,
 .book-page {
   position: relative;
   min-width: 0;
-  min-height: clamp(520px, 64dvh, 760px);
-  padding: clamp(34px, 4.3vw, 58px) clamp(30px, 4vw, 54px) 56px;
+  min-height: clamp(390px, min(64dvh, 72cqi), 760px);
+  padding: clamp(24px, 4.3cqi, 58px) clamp(16px, 4cqi, 54px)
+    clamp(42px, 5cqi, 56px);
   color: var(--text-soft);
   background: var(--book-page);
 }
@@ -688,16 +691,16 @@ button.is-active,
 }
 
 .book-page-left .book-page-number {
-  left: 30px;
+  left: clamp(16px, 3cqi, 30px);
 }
 
 .book-page-right .book-page-number {
-  right: 30px;
+  right: clamp(16px, 3cqi, 30px);
 }
 
 .book-empty-page {
   display: grid;
-  min-height: 18rem;
+  min-height: clamp(12rem, 40cqi, 18rem);
   place-items: center;
   color: var(--faint);
   font-family: var(--font-ui);
@@ -844,30 +847,16 @@ button.is-active,
 }
 
 @container reader (max-width: 720px) {
-  .reader-canvas.is-book-canvas {
-    padding: 22px 14px 36px;
-  }
-
   .book-spread {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 8px;
-    padding: 8px;
-    border-radius: 16px;
+    border-radius: 14px;
   }
 
-  .book-page {
-    min-height: 440px;
-    padding: 34px 28px 52px;
+  .book-page-left {
+    border-radius: 9px 2px 2px 9px;
   }
 
-  .book-page-left,
   .book-page-right {
-    border-radius: 10px;
-    box-shadow: none;
-  }
-
-  .book-gutter {
-    display: none;
+    border-radius: 2px 9px 9px 2px;
   }
 }
 
@@ -886,15 +875,15 @@ button.is-active,
     font-size: 10px;
   }
 
-  .book-page {
-    min-height: 390px;
-    padding-inline: 24px;
+  .book-reader {
+    font-size: clamp(65%, 2.55cqi, 100%);
   }
 }
 
 @media (max-width: 1180px) {
   .workspace {
-    grid-template-columns: minmax(300px, 350px) minmax(0, 1fr);
+    grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
+    gap: 14px;
   }
 
   .reader-header {

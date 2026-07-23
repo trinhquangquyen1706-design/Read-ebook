@@ -54,6 +54,18 @@ test("contains the bilingual reader experience", async () => {
   assert.match(speech, /buildSpeechQueue/);
   assert.match(speech, /chooseSpeechVoice/);
   assert.match(css, /\.book-spread/);
+  assert.match(
+    css,
+    /\.book-spread\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/s,
+  );
+  assert.doesNotMatch(
+    css,
+    /\.book-spread\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s,
+  );
+  assert.match(
+    css,
+    /\.book-reader\s*\{[^}]*font-size:\s*clamp\(70%,\s*2\.15cqi,\s*100%\)/s,
+  );
   assert.match(css, /\.book-gutter/);
   assert.match(css, /\.is-speaking/);
   assert.match(css, /@container reader/);
